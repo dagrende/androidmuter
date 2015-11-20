@@ -23,6 +23,7 @@ import android.util.Log;
 import android.view.View;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.widget.Switch;
 import android.widget.Toast;
 
 
@@ -30,6 +31,11 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     private static final String TAG = "MyActivity";
     private SensorManager mSensorManager;
     private Sensor mProximity;
+    private Sensor mAccelerometer;
+    private AccelerometerListener accelerometerListener = new AccelerometerListener();
+    private NotificationManager mNotificationManager;
+    private int isFaceDownSeconds;
+    private Switch mMuterActive;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -37,58 +43,103 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         setContentView(R.layout.activity_main);
         Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
-
-        // Get an instance of the sensor service, and use that to get an instance of
-        // a particular sensor.
         mSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
-        mProximity = mSensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY);
+        mMuterActive = (Switch)findViewById(R.id.muterActive);
 
+        mNotificationManager =
+                (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
 
-        FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);
-        fab.setOnClickListener(new View.OnClickListener() {
+        mMuterActive.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-//              Snackbar.make(view, "Replace with your own action", Snackbar.LENGTH_LONG)
-//                    .setAction("Action", null).show();
-                NotificationManager mNotificationManager =
-                        (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-                if (mNotificationManager.isNotificationPolicyAccessGranted()) {
-                    mNotificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALARMS);
+                Log.d("AndroidMuter", "click " + mMuterActive.isChecked());
+                if (mMuterActive.isChecked()) {
+                    setMuterActive();
                 } else {
-                    new AlertDialog.Builder(MainActivity.this)
-                            .setTitle("Enable Don't disturb change")
-                            .setMessage("You have to change a setting for this app to work.")
-                            .setIcon(android.R.drawable.ic_dialog_alert)
-                            .setPositiveButton("Open Settings", new DialogInterface.OnClickListener() {
-
-                                public void onClick(DialogInterface dialog, int whichButton) {
-                                    startActivityForResult(new Intent(android.provider.Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS), 0);
-                                }})
-                            .setNegativeButton(android.R.string.cancel, null).show();
-                    Log.d("AndroidMuter", "opening dialog");
-
+                    setMuterInactive();
                 }
             }
         });
+
+        if (mNotificationManager.isNotificationPolicyAccessGranted()) {
+            mMuterActive.setChecked(true);
+            setMuterActive();
+        } else {
+            new AlertDialog.Builder(MainActivity.this)
+                    .setTitle("Enable Don't disturb change")
+                    .setMessage("You have to change a setting for this app to work.")
+                    .setIcon(android.R.drawable.ic_dialog_alert)
+                    .setPositiveButton("Open Settings", new DialogInterface.OnClickListener() {
+
+                        public void onClick(DialogInterface dialog, int whichButton) {
+                            startActivityForResult(new Intent(android.provider.Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS), 0);
+                        }})
+                    .setNegativeButton(android.R.string.cancel, null).show();
+        }
+
+    }
+
+    private void setMuterInactive() {
+        Log.d("AndroidMuter", "set muter inactive");
+        mNotificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL);
+        mSensorManager.unregisterListener(accelerometerListener);
+        mSensorManager.unregisterListener(MainActivity.this);
+    }
+
+    private void setMuterActive() {
+        Log.d("AndroidMuter", "set muter active");
+        mProximity = mSensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY);
+        mSensorManager.registerListener(MainActivity.this, mProximity, SensorManager.SENSOR_DELAY_NORMAL);
+        mAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
     }
 
     @Override
     public void onSensorChanged(SensorEvent event) {
         if (event.sensor.getType() == Sensor.TYPE_PROXIMITY) {
-            Log.d("AndroidMuter", "prox change");
+            Log.d("AndroidMuter", "prox change to " + event.values[0]);
+            if (event.values[0] < 0.1) {
+                // front is against something - don't disturb
+                mSensorManager.registerListener(accelerometerListener, mAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
+            } else {
+                // not against something - may disturb again
+                Log.d("AndroidMuter", "not silent");
+                mNotificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL);
+                mSensorManager.unregisterListener(accelerometerListener);
+            }
+        }
+    }
+
+    class AccelerometerListener implements SensorEventListener {
+        private long isFaceDownStartTime;
+
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
+                // test if face down
+//                Log.d("AndroidMuter", "accel change to x=" + event.values[0] + " y=" + event.values[1] + " z=" + event.values[2]);
+                boolean isFaceDown = Math.abs(event.values[0]) < 0.6
+                        && Math.abs(event.values[1]) < 0.6
+                        && Math.abs(event.values[2] + 9.81) < 1.0;
+
+                if (isFaceDown) {
+                    if ((event.timestamp - isFaceDownStartTime) > (5 * 1000000000L)) {
+                        Log.d("AndroidMuter", "silent");
+                        mNotificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALARMS);
+                        mSensorManager.unregisterListener(accelerometerListener);
+                    }
+                } else {
+                    isFaceDownStartTime = event.timestamp;
+                }
+            }
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int i) {
         }
     }
 
     @Override
     public void onAccuracyChanged(Sensor sensor, int i) {
-
-    }
-
-    @Override
-    protected void onResume() {
-        // Register a listener for the sensor.
-        super.onResume();
-        mSensorManager.registerListener(MainActivity.this, mProximity, SensorManager.SENSOR_DELAY_NORMAL);
     }
 
     @Override
