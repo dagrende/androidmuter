@@ -36,6 +36,8 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     private NotificationManager mNotificationManager;
     private int isFaceDownSeconds;
     private Switch mMuterActive;
+    private long isFaceDownStartTime;
+    private long mMonitorAccelStartTime;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -98,7 +100,9 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         if (event.sensor.getType() == Sensor.TYPE_PROXIMITY) {
             Log.d("AndroidMuter", "prox change to " + event.values[0]);
             if (event.values[0] < 0.1) {
-                // front is against something - don't disturb
+                // front is against something - start reading accelerometer to see if face down
+                mMonitorAccelStartTime = event.timestamp;
+                isFaceDownStartTime = event.timestamp;
                 mSensorManager.registerListener(accelerometerListener, mAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
             } else {
                 // not against something - may disturb again
@@ -110,7 +114,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     }
 
     class AccelerometerListener implements SensorEventListener {
-        private long isFaceDownStartTime;
 
         @Override
         public void onSensorChanged(SensorEvent event) {
@@ -120,9 +123,12 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 boolean isFaceDown = Math.abs(event.values[0]) < 0.6
                         && Math.abs(event.values[1]) < 0.6
                         && Math.abs(event.values[2] + 9.81) < 1.0;
-
+                if ((event.timestamp - mMonitorAccelStartTime) > (5 * 1000000000L)) {
+                    Log.d("AndroidMuter", "stop waiting for face-down");
+                    mSensorManager.unregisterListener(accelerometerListener);
+                }
                 if (isFaceDown) {
-                    if ((event.timestamp - isFaceDownStartTime) > (5 * 1000000000L)) {
+                    if ((event.timestamp - isFaceDownStartTime) > (2 * 1000000000L)) {
                         Log.d("AndroidMuter", "silent");
                         mNotificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALARMS);
                         mSensorManager.unregisterListener(accelerometerListener);
